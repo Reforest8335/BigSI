@@ -88,6 +88,9 @@
   const BEST_KEY = 'xhp.best.v1';
   const MUTE_KEY = 'xhp.mute.v1';
   const MODE_KEY = 'xhp.drop.v1';     // 掉落模式 + 指定级别（想每次都是随机就把这条删掉）
+  /* 音效默认**关闭**：很多人是在公共场合点开的，突然出声很尴尬。
+     玩家主动点开之后会被记住（MUTE_KEY 存 '0'），下次不再默认静音。 */
+  const MUTE_DEFAULT = true;
 
   /* ---------------------------------------------------------
    *  DOM
@@ -149,7 +152,7 @@
      **刻意不在页面上放邮箱、也不放作者账号主页**，一切沟通走 GitHub Issues：
      联系方式不散落在页面里，也方便公开留痕与追踪。
      想改地址 / 加回仓库链接，只改这三个常量即可，不用动 HTML。 */
-  const REPO_URL = 'https://github.com/Reforest8335/BigSI.github.io';
+  const REPO_URL = 'https://github.com/Reforest8335/BigSI';
   const ISSUES_URL = REPO_URL + '/issues';
   const ORIGIN_URL = 'https://github.com/YHSome/BigNaiWa';   // 原作者的仓库（署名用，见 README）
 
@@ -260,7 +263,11 @@
 
   const Sound = {
     ctx: null,
-    muted: localStorage.getItem(MUTE_KEY) === '1',
+    /* 没存过就按 MUTE_DEFAULT（默认静音）来；存过就听玩家的 */
+    muted: (function () {
+      const saved = localStorage.getItem(MUTE_KEY);
+      return saved === null ? MUTE_DEFAULT : saved === '1';
+    })(),
 
     ensure() {
       if (this.ctx) return this.ctx;
@@ -303,12 +310,56 @@
     bonus()  { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.tone(f, f, 0.22, 0.12, 'triangle'), i * 90)); }
   };
 
-  /* 手机上的轻微震动反馈（跟着静音开关走；不支持的浏览器自动忽略） */
+  /* ---------------------------------------------------------
+   *  手机震动反馈
+   * ------------------------------------------------------- */
+
+  /* 之前有两个问题，玩家反馈「震动不对等」：
+   *   1. 时长写成 `6 + 级别` —— 同样的"合成成功"，级别不同震感差一倍
+   *      （第1级 7ms、第9级 15ms）。改成按**档位**给固定时长：
+   *      普通合成一律 9ms，大级别 13ms，最高级合体 18ms，游戏结束 60ms。
+   *   2. `navigator.vibrate()` 是**替换**语义 —— 连续合成时后一次的短震会
+   *      直接掐断前一次，所以同一级别也会时轻时重。这里做合流：
+   *      短时间内只保留**最强**的那次，等这口气过去再补发。
+   * 开关：HAPTIC_ENABLED 改 false 即完全关闭；它仍然跟随静音开关。 */
+  const HAPTIC_ENABLED = true;
+  const HAPTIC_WINDOW_MS = 45;          // 合流窗口
+  const HAPTIC = {                        // 各档位的震动时长（ms）
+    mergeLow: 9, mergeHigh: 13, mergeMax: 18, over: 60
+  };
+  /* 哪种合成算"大级别"：第 6 级（索引 5）往上 */
+  const HAPTIC_BIG_TIER = 5;
+
+  let hapticLast = 0, hapticTimer = 0, hapticPending = 0;
+
   function haptic(ms) {
-    if (Sound.muted) return;
-    if (navigator.vibrate) {
-      try { navigator.vibrate(ms); } catch (e) { /* 忽略 */ }
+    if (!HAPTIC_ENABLED || Sound.muted) return;
+    if (!navigator.vibrate) return;
+    const now = performance.now();
+    if (now - hapticLast < HAPTIC_WINDOW_MS) {
+      /* 窗口内：只记下最强的一次，窗口结束再补发 */
+      if (ms > hapticPending) hapticPending = ms;
+      if (!hapticTimer) {
+        hapticTimer = setTimeout(() => {
+          hapticTimer = 0;
+          const v = hapticPending;
+          hapticPending = 0;
+          hapticLast = performance.now();
+          if (v && !Sound.muted) { try { navigator.vibrate(v); } catch (e) {} }
+        }, HAPTIC_WINDOW_MS);
+      }
+      return;
     }
+    hapticLast = now;
+    hapticPending = 0;
+    try { navigator.vibrate(ms); } catch (e) { /* 忽略 */ }
+  }
+
+  /* 按级别取震动档位：同样的操作给同样的震感，只按"大/小"分档 */
+  function hapticMerge(tier) {
+    haptic(tier >= MAX_TIER ? HAPTIC.mergeMax
+          : tier >= HAPTIC_BIG_TIER ? HAPTIC.mergeHigh
+          : HAPTIC.mergeLow);
   }
 
   /* ---------------------------------------------------------
@@ -538,6 +589,44 @@
       }
     }
 
+    /* --- 解包（de-engulf）：把"整颗卡在别人轮廓里"的球推出去 ---
+       为什么单独需要这一段：球球约束只在**子圆相交**时给出法线。
+       但小球整颗落进大球的碰撞轮廓内部时，小球的所有子圆都在大球内部，
+       交集退化成一个"点"或空集，求解器拿不到可靠的向外方向；
+       如果这时旁边还有墙推着它，它就会永远卡在里面以几百 px/s 抖动
+       （实测 tier2 的小球卡在 tier10 里，d/大球半径 = 0.56，速度 266px/s 不衰减）。
+
+       判据用「中心距 < 大球包围圆半径 × 0.9」：
+       留 10% 余量是因为包围圆可能略大于实际碰撞面，
+       真正常见的正常接触不会低于这个比例。 */
+    for (let i = 0; i < balls.length; i++) {
+      const a = balls[i];
+      if (a.dead) continue;
+      for (let j = i + 1; j < balls.length; j++) {
+        const b = balls[j];
+        if (b.dead) continue;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d = Math.sqrt(dx * dx + dy * dy);
+        const bigRb = Math.max(a.rb, b.rb);
+        if (d >= bigRb * 0.9) continue;              // 正常接触，交给子圆约束
+        if (d < 1e-4) { dx = 0; dy = -1; d = 1; }    // 完全重合：随便挑个方向
+        const nx = dx / d, ny = dy / d;
+        /* 把小球推到"刚好在大球包围圆外"，按逆质量分配（重的少动） */
+        const need = bigRb * 0.95 - d;
+        if (need <= 0) continue;
+        const wa = a.invMass / (a.invMass + b.invMass);
+        const wb = b.invMass / (a.invMass + b.invMass);
+        const small = a.r <= b.r ? a : b;
+        /* 只推小的那颗（大的通常是堆底，推它会连锁塌方） */
+        const wA = (small === a) ? 1 : 0;
+        const wB = (small === b) ? 1 : 0;
+        a.x -= nx * need * wA;  a.y -= ny * need * wA;
+        b.x += nx * need * wB;  b.y += ny * need * wB;
+        a.contacts++; b.contacts++;
+        syncParts(a); syncParts(b);
+      }
+    }
+
     /* --- 收尾墙约束（保险）---
        约束顺序改成「球球 -> 墙」之后，子步末尾本来就已经在墙内了。
        这一段是**兜底**：万一还有被顶出去的（例如合成分离产生的瞬时重叠），
@@ -664,7 +753,7 @@
         burst(mx, my, MAX_TIER, 90, 560);
         burst(mx, my, MAX_TIER - 2, 42, 340);
         Sound.bonus();
-        haptic(70);
+        haptic(HAPTIC.over);
         state.flash = 1.4;                    // 比普通合成更亮的全屏闪
         state.freeze = FREEZE_MS / 1000;      // 定格一下，让这一下有重量
         state.floats.push({ x: mx, y: my - 74, text: '两个最高级 💥', life: 1.6 });
@@ -688,7 +777,7 @@
         addScore(MERGE_SCORE[nt], mx, my, '+' + MERGE_SCORE[nt]);
         burst(mx, my, nt, 8 + nt * 2, 140 + nt * 22);
         Sound.merge(nt);
-        haptic(6 + nt);
+        hapticMerge(nt);
         if (nt === MAX_TIER) state.flash = 1;
       }
     }
@@ -776,6 +865,20 @@
     el.classList.remove('bump');
     void el.offsetWidth;
     el.classList.add('bump');
+  }
+
+  /* 屏幕提示条：给「音效开关」「掉落模式」这类**点了之后界面没明显变化**的操作一个反馈。
+     不然在手机上点一下什么都不知道 —— 尤其掉落模式，只换了按钮上一个小图标。
+     画在棋盘上方的药丸样式，同一时刻只留一条（新的顶掉旧的），免得刷屏。 */
+  let toastSeq = 0;
+  function toast(text) {
+    for (let i = state.floats.length - 1; i >= 0; i--) {
+      if (state.floats[i].toast) state.floats.splice(i, 1);
+    }
+    state.toastSeq = ++toastSeq;
+    state.floats.push({
+      x: W / 2, y: 250, text: text, life: 1.5, toast: true
+    });
   }
 
   /* ---------------------------------------------------------
@@ -1162,10 +1265,40 @@
     for (let i = state.floats.length - 1; i >= 0; i--) {
       const f = state.floats[i];
       const big = !!f.big;
-      f.y -= (big ? 24 : 46) * dt;
-      f.life -= dt * (big ? 0.55 : 1.05);
+      /* 提示条飘得慢一点、活得久一点，够看清 */
+      f.y -= (big ? 24 : (f.toast ? 14 : 46)) * dt;
+      f.life -= dt * (big ? 0.55 : (f.toast ? 0.75 : 1.05));
       if (f.life <= 0) { state.floats.splice(i, 1); continue; }
       ctx.globalAlpha = Math.min(1, f.life * 1.4);
+
+      /* 提示条（音效/掉落模式这些开关）：画成一颗药丸，不然白字叠在棋盘上看不清 */
+      if (f.toast) {
+        ctx.globalAlpha = Math.min(1, f.life * 2);
+        ctx.font = '700 16px "PingFang SC", "Microsoft YaHei", system-ui, sans-serif';
+        const wTxt = ctx.measureText(f.text).width;
+        const pw = wTxt + 34, ph = 38;
+        const px = clamp(f.x - pw / 2, WALL + 6, W - WALL - 6 - pw);
+        ctx.save();
+        ctx.shadowColor = 'rgba(20,45,75,.28)';
+        ctx.shadowBlur = 14;
+        ctx.shadowOffsetY = 4;
+        ctx.fillStyle = 'rgba(22,48,77,.92)';
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(px, f.y - ph / 2, pw, ph, ph / 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(px, f.y - ph / 2, pw, ph);
+        }
+        ctx.restore();
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText(f.text, px + pw / 2, f.y + 6);
+        ctx.textAlign = 'left';
+        ctx.globalAlpha = 1;
+        continue;
+      }
+
       ctx.font = big
         ? '900 40px "PingFang SC", "Microsoft YaHei", system-ui, sans-serif'
         : '700 20px "PingFang SC", "Microsoft YaHei", system-ui, sans-serif';
@@ -1261,7 +1394,13 @@
       acc -= FIXED;
       guard++;
     }
-    if (guard >= 5) acc = 0;
+    /* 追不上时**不要把 acc 清零**。
+       原来的 `if (guard >= 5) acc = 0;` 会直接丢掉攒下的时间，
+       而手机上掉到 30fps 时几乎每帧都会撞到这个上限 ——
+       于是每帧都丢一点时间，画面表现为周期性的顿挫/抖动。
+       改成封顶：最多保留 1 帧的量，多出来的才丢，
+       这样慢机器上是"整体节奏略慢"而不是"一顿一顿"。 */
+    if (acc > FIXED) acc = FIXED;
 
     render(dt);
     requestAnimationFrame(frame);
@@ -1394,6 +1533,8 @@
     Sound.muted = !Sound.muted;
     localStorage.setItem(MUTE_KEY, Sound.muted ? '1' : '0');
     paintSoundBtn();
+    /* 点了之后必须让玩家知道结果：按钮上的图标变化太小了 */
+    toast(Sound.muted ? '🔇 音效已关闭' : '🔊 音效已开启');
     if (!Sound.muted) Sound.merge(1);
   });
 
@@ -1428,8 +1569,27 @@
     let text = DROP_MODE_LABEL[m] || m;
     if (m === 'fixed') text = '第 ' + (dropModeRef.fixedTier + 1) + ' 级';
     if (lbl) lbl.textContent = '掉落：' + text;
-    if (ico) ico.textContent = m === 'random' ? '🎲' : (m === 'max' ? '👑' : (m === 'cycle' ? '🔁' : (m === 'noRepeat' ? '🚫' : '🎯')));
+    if (ico) ico.textContent = modeIcon(m);
     modeBtn.title = '掉落模式：' + text + '\n点一下换下一个模式（' + DROP_MODES.map(k => DROP_MODE_LABEL[k]).join(' → ') + '）';
+  }
+
+  function modeIcon(m) {
+    return m === 'random' ? '🎲'
+         : m === 'max' ? '👑'
+         : m === 'cycle' ? '🔁'
+         : m === 'noRepeat' ? '🚫'
+         : '🎯';
+  }
+
+  /* 给提示条用的说明文案（要说清"现在是怎么样"，不只报个名字） */
+  function modeToastText(m) {
+    switch (m) {
+      case 'max':      return '👑 掉落：一直掉最高级（第 11 级）';
+      case 'fixed':    return '🎯 掉落：一直掉第 ' + (dropModeRef.fixedTier + 1) + ' 级';
+      case 'cycle':    return '🔁 掉落：从第 1 级起逐个轮换';
+      case 'noRepeat': return '🚫 掉落：随机，但不连着掉同一个';
+      default:         return '🎲 掉落：随机';
+    }
   }
 
   /* 点一下就往后轮换；轮换到「指定」时默认指向最高级，方便「一直掉最大的」。
@@ -1442,6 +1602,8 @@
          这样「一直掉最大的」只需要点两下 */
       if (next === 'fixed' && dropModeRef.value !== 'fixed') dropModeRef.fixedTier = MAX_TIER;
       applyDropMode(next);
+      /* 手机上按钮只显示一个图标，不提示的话根本不知道切成了什么 */
+      toast(modeToastText(next));
       if (next === 'max') Sound.merge(6);
     });
   }
