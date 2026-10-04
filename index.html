@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#eef4fb">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="校徽碰碰乐">
+<meta name="description" content="校徽碰碰乐 · 纯前端小游戏：拖动瞄准、松手投放，相同的撞在一起合成更大的一只。">
+
+<!-- 内联 SVG 图标：形状就是游戏里的"徽章"，零额外请求。
+     不写这一行的话浏览器会去要 /favicon.ico，在 GitHub Pages 上留一条 404。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23e9f3fd'/%3E%3Ccircle cx='32' cy='32' r='26' fill='none' stroke='%232f7cc4' stroke-width='7'/%3E%3Ccircle cx='32' cy='32' r='12' fill='none' stroke='%233b93d8' stroke-width='5'/%3E%3Ccircle cx='32' cy='32' r='4' fill='%23276ba3'/%3E%3C/svg%3E">
+
+<title>校徽碰碰乐</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<main class="app">
+
+  <!-- ===== 游戏区 ===== -->
+  <section class="stage" id="stage">
+    <canvas id="game" aria-label="校徽碰碰乐游戏区域"></canvas>
+
+    <!-- 复活币：浮在棋盘左上角。
+         刻意不放进顶部信息条 —— 手机上面板是横向 flex，
+         多一个卡片会把「分数 / 最高分」挤到 52px 宽还折行（实测面板从 66px 涨到 102px）。
+         这里 pointer-events 关掉，永远不会挡住投放。 -->
+    <div class="revive-chip" id="reviveBadge" hidden>
+      <span class="revive-chip-ico" aria-hidden="true">🪙</span><span id="reviveCount">×0</span>
+    </div>
+
+    <div class="overlay" id="overlay">
+      <div class="dialog">
+
+        <!-- ===== 越线第一屏：有复活币时才出现 ===== -->
+        <div class="revive-ask" id="revivePrompt" hidden>
+          <div class="dialog-emoji">😵</div>
+          <h2>还能再救一下</h2>
+          <p class="dialog-score">本局得分 <strong id="reviveScore">0</strong></p>
+          <p class="revive-hint">清掉警戒线以上的块，接着玩</p>
+          <div class="dialog-actions">
+            <button class="btn" id="giveUpBtn" type="button">不了，结束吧</button>
+            <button class="btn btn-revive" id="reviveBtn" type="button">🪙 用一枚复活币</button>
+          </div>
+          <p class="dialog-hint" id="reviveLeft">还剩 1 枚</p>
+        </div>
+
+        <!-- ===== 第二屏：正式结算 ===== -->
+        <div id="overPanel">
+          <div class="dialog-emoji">🎓</div>
+          <h2 id="overTitle">游戏结束</h2>
+          <p class="dialog-score">本局得分 <strong id="finalScore">0</strong></p>
+          <p class="dialog-best">最高分 <span id="finalBest">0</span></p>
+
+          <!-- 排行榜暂时禁用：入口与提交区整体隐藏。
+               恢复办法见 game.js 顶部的 LEADERBOARD_ENABLED。 -->
+          <div class="submit-box" id="submitBox" hidden>
+            <p class="submit-msg" id="submitMsg"></p>
+            <p class="my-name">昵称：<strong id="myNameLabel">默认用户</strong>
+              <button class="link-btn" id="editNameBtn" type="button">改昵称</button>
+            </p>
+            <button class="btn" id="submitBtn" type="button" hidden disabled>重试提交</button>
+          </div>
+
+          <div class="dialog-actions">
+            <button class="btn btn-primary" id="restartBtn" type="button">再来一局</button>
+          </div>
+          <p class="dialog-hint">按 R 键也可重新开始</p>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 侧边面板 ===== -->
+  <aside class="panel">
+
+    <header class="panel-head">
+      <h1>校徽碰碰乐</h1>
+      <p class="subtitle">相同的撞在一起，越合越大</p>
+    </header>
+
+    <div class="stats">
+      <div class="stat">
+        <span class="stat-label">分数</span>
+        <strong class="stat-value" id="score">0</strong>
+      </div>
+      <div class="stat">
+        <span class="stat-label">最高分</span>
+        <strong class="stat-value stat-best" id="best">0</strong>
+      </div>
+    </div>
+
+    <div class="next-box">
+      <span class="box-label">下一个</span>
+      <canvas id="next" width="160" height="160" aria-label="下一个"></canvas>
+    </div>
+
+    <div class="chain-box">
+      <span class="box-label">合成表</span>
+      <canvas id="chain" width="680" height="112" aria-label="合成顺序"></canvas>
+      <p class="chain-note">✨ 两个最高级撞在一起会一起炸掉，换 <strong>500 分</strong> + <strong>一枚复活币</strong></p>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="soundBtn" type="button" aria-pressed="true">
+        <span class="ico">🔊</span><span class="lbl">音效开</span>
+      </button>
+      <!-- 掉落模式：点一下轮换到下一个（随机 / 最高级 / 逐个 / 不重复 / 指定）。
+           选择记在 localStorage，刷新后保持。详见 README「掉落模式」。 -->
+      <button class="btn" id="modeBtn" type="button" title="切换掉落模式">
+        <span class="ico">🎲</span><span class="lbl">掉落：随机</span>
+      </button>
+      <button class="btn btn-primary" id="resetBtn" type="button" title="重新开始">
+        <span class="ico">↻</span><span class="lbl">重开</span>
+      </button>
+    </div>
+
+    <p class="tips">
+      鼠标：移动瞄准、点击投放；触屏：拖动瞄准、松手投放。<br>
+      ← → 微调位置，空格投放，R 重开。<br>
+      每 <strong>2000 分</strong>攒一枚<strong>复活币</strong>，只在本局有效。
+    </p>
+
+  </aside>
+
+</main>
+
+<!-- ===== 页脚：常驻免责声明 =====
+     联系方式统一走 GitHub Issues，页面上不放邮箱、也不放账号主页链接。
+     「提 issue」的地址由 game.js 顶部的 ISSUES_URL 注入（见 applyRepoLinks）。 -->
+<footer class="site-foot">
+  <p class="foot-disclaimer">
+    <strong>免责声明：</strong>本游戏仅供娱乐。游戏内“学校合成”“等级/强度/评分”等均为作者主观虚构设定，
+    不代表真实学校水平，亦非任何学校的官方作品、排名或认证。游戏中引用的校名、校徽等素材归各自权利人所有，
+    本游戏未获任何学校授权。请理性游玩，切勿引发争议、嘲讽或恶意传播。
+  </p>
+  <p class="foot-credit">
+    <span>内容有不当之处，或权利人需要下架，请到
+      <a data-repo="issues" href="https://github.com/Reforest8335/BigSI.github.io/issues"
+         target="_blank" rel="noopener noreferrer">GitHub 提 issue</a>，作者会核实后处理。</span>
+  </p>
+</footer>
+
+<!-- ===== 进入弹窗：免责声明（每次进入都要确认） ===== -->
+<div class="modal gate" id="gateModal" aria-hidden="false" role="dialog" aria-modal="true" aria-labelledby="gateTitle">
+  <div class="modal-card gate-card">
+    <header class="modal-head">
+      <h2 id="gateTitle">免责声明与娱乐提示</h2>
+    </header>
+
+    <div class="gate-body">
+      <p>本游戏为个人制作的娱乐向小游戏，仅供休闲娱乐，<strong>不构成对任何学校的评价、排名、推荐、认证或官方合作。</strong></p>
+      <p>游戏中出现的“XX学校合成XX学校”“等级”“强度”“评分”“稀有度”“品质”等内容，均为作者基于游戏玩法设定的<strong>主观虚构内容</strong>，不代表真实学校的办学水平、教学质量、社会声誉、录取难度或任何客观排名，也不应作为择校、升学、评价学校、攻击学校或引战的依据。</p>
+      <p>本游戏未获得任何学校、教育机构、政府部门或相关权利人的授权、认可或合作。游戏中引用的校名、校徽、校园名称及其他相关元素，其权利归各自权利人所有。本游戏对上述元素的使用仅为娱乐性引用，不表示与任何学校存在关联。</p>
+      <p>请玩家理性游玩，不要将游戏内容当真，也不要截图、转发、二次创作或传播用于嘲讽、引战、网暴、恶意比较或其他不当用途。因玩家不当使用、传播或解读引发的纠纷，由行为人自行承担相应责任。</p>
+      <p>如相关权利人认为本游戏内容存在不当，请在
+        <a data-repo="issues" href="https://github.com/Reforest8335/BigSI.github.io/issues" target="_blank" rel="noopener noreferrer">GitHub 提一个 issue</a>
+        说明情况。作者会在核实后及时处理，包括但不限于修改、隐藏、替换或下架相关内容。</p>
+    </div>
+
+    <label class="gate-agree" for="gateCheck">
+      <input type="checkbox" id="gateCheck">
+      <span>我阅读、理解并同意本声明</span>
+    </label>
+
+    <button class="btn btn-primary btn-wide" id="gateStart" type="button" disabled>开始游戏</button>
+  </div>
+</div>
+
+<!-- 碰撞形状数据（按贴图轮廓自动生成，由 tools/build_parts.py 产出） -->
+<script src="assets/fruits/parts.js"></script>
+<!-- 极模糊占位图（内联 data URL，由 tools/make_blur.py 产出）：贴图没到位时先画它 -->
+<script src="assets/fruits/blur.js"></script>
+<script src="game.js"></script>
+<!-- 免责声明弹窗 -->
+<script src="disclaimer.js"></script>
+<!--
+  在线排行榜：已下线，所以不加载它的脚本。
+  原因有两条（详见 README「排行榜」和 AUDIT.md）：
+    1) 榜单写入凭据必须放在客户端，纯静态站没法防刷榜；
+    2) 那份构建产物 leaderboard.min.js 里编码着一个仍然有效的写入密钥，
+       留在公开仓库里等于把榜单交给任何人。
+  产物已从仓库移除。以后真要恢复，建议先把写入挪到服务端代理，
+  再到 git 历史里取回旧实现作参考（commit 861b487 之前有完整源码）。
+-->
+</body>
+</html>
