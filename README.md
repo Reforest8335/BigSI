@@ -9,7 +9,7 @@
 >
 > 请玩家理性游玩，不要将游戏内容当真，也不要截图、转发、二次创作或传播用于嘲讽、引战、网暴、恶意比较或其他不当用途。因玩家不当使用、传播或解读引发的纠纷，由行为人自行承担相应责任。
 >
-> 如相关权利人认为本游戏内容存在不当，请通过 **[此处](https://github.com/Reforest8335/BigSI.github.io/issues)** 联系作者。作者将在核实后及时进行处理，包括但不限于修改、隐藏、替换或下架相关内容。
+> 如相关权利人认为本游戏内容存在不当，请通过 **[此处](https://github.com/Reforest8335/BigSI/issues)** 联系作者。作者将在核实后及时进行处理，包括但不限于修改、隐藏、替换或下架相关内容。
 
 # 校徽碰碰乐
 
@@ -36,7 +36,7 @@
 
 ## 🎮 在线玩
 
-**<https://reforest8335.github.io/BigSI.github.io/>**
+**<https://reforest8335.github.io/BigSI/>**
 
 （GitHub Pages 托管，手机浏览器打开就能玩，也可以「添加到主屏幕」当 App 用。）
 
@@ -589,5 +589,5 @@ node physics.test.js                                   # 物理自检
 请理性游玩，切勿用于引战、嘲讽、网暴、恶意比较或传播。
 
 **权利人如需下架、或有任何异议：**
-请在[此处](https://github.com/Reforest8335/BigSI.github.io/issues)提一个 issue 说明情况，
+请在[此处](https://github.com/Reforest8335/BigSI/issues)提一个 issue 说明情况，
 作者会在核实后及时处理，包括但不限于修改、隐藏、替换或下架相关内容。
