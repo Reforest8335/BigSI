@@ -36,7 +36,7 @@
 
 ## 🎮 在线玩
 
-**<https://reforest8335.github.io/BigSI/>**
+**<://reforest8335.github.io/BigSI/>**
 
 （GitHub Pages 托管，手机浏览器打开就能玩，也可以「添加到主屏幕」当 App 用。）
 
@@ -113,7 +113,7 @@ for (const b of balls) {
 
 ## 运行
 
-线上直接开 <https://reforest8335.github.io/BigSI.github.io/>；
+线上直接开 <https://reforest8335.github.io/BigSI/>；
 本地双击 `index.html` 即可（`file://` 协议下也能跑；排行榜已下线，所以不涉及网络请求）。
 也可以起个静态服务：
 
